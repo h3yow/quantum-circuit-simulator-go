@@ -154,6 +154,11 @@ func parseGate(fields []string, c *Circuit) (Operation, error) {
 		if err != nil {
 			return Operation{}, err
 		}
+		for j := 0; j < i; j++ {
+			if g.Qubits[j] == q {
+				return Operation{}, ErrDuplicateQubit{Gate: name, Qubit: q}
+			}
+		}
 		g.Qubits[i] = q
 	}
 	if spec.hasParam {

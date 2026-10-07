@@ -17,6 +17,18 @@ import (
 	"github.com/h3yow/quantum-circuit-simulator-go/circuit"
 )
 
+// 资源上限规则：
+//   - 调用方未显式给出上限（maxQubits <= 0）时使用 DefaultMaxQubits；
+//   - 任何调用都无法突破 HardMaxQubits，超出时钳制到该值；
+//   - 不合理的上限按上述规则统一钳制，不会因此拒绝合法线路。
+const (
+	// DefaultMaxQubits 是未显式指定上限时的缺省量子比特数上限。
+	DefaultMaxQubits = 20
+	// HardMaxQubits 是全局硬上限，任何调用都无法突破
+	// （2^30 个 complex128 已达 16 GiB，超出无实际意义）。
+	HardMaxQubits = 30
+)
+
 // ErrTooManyQubits 表示态矢量所需内存超出允许范围。
 type ErrTooManyQubits struct {
 	Qubits int
@@ -36,11 +48,25 @@ type Result struct {
 
 // Simulator 可并发复用；内部不保存任何运行态。
 type Simulator struct {
-	MaxQubits int // 态矢量允许的最大量子比特数，超出返回 ErrTooManyQubits
+	MaxQubits int // 生效的量子比特数上限（已经过钳制），超出返回 ErrTooManyQubits
 }
 
-// New 创建一个模拟器。maxQubits 为允许的量子比特数上限。
-func New(maxQubits int) *Simulator { return &Simulator{MaxQubits: maxQubits} }
+// New 创建一个模拟器。
+//
+// maxQubits 为期望的量子比特数上限，按统一规则钳制：
+//   - maxQubits <= 0：视为未指定，使用 DefaultMaxQubits；
+//   - maxQubits > HardMaxQubits：钳制到 HardMaxQubits。
+//
+// 钳制后的生效值保存在返回实例的 MaxQubits 字段中，调用方可直接读取确认。
+func New(maxQubits int) *Simulator {
+	if maxQubits <= 0 {
+		maxQubits = DefaultMaxQubits
+	}
+	if maxQubits > HardMaxQubits {
+		maxQubits = HardMaxQubits
+	}
+	return &Simulator{MaxQubits: maxQubits}
+}
 
 // Run 以给定随机种子运行线路一次，返回最终经典比特数组。
 // 同一 (circuit, seed) 的结果完全可复现。

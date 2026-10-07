@@ -49,6 +49,10 @@ func TestParseRejections(t *testing.T) {
 		{"门操作数不足", "qubits 2\nbits 1\nCNOT 0\n", ErrIncomplete{}},
 		{"旋转门缺参数", "qubits 1\nbits 1\nRX 0\n", ErrIncomplete{}},
 		{"非法条件取值", "qubits 1\nbits 1\nIF 0==2 X 0\n", ErrIncomplete{}},
+		{"CNOT操作数重复", "qubits 2\nbits 1\nCNOT 0 0\n", ErrDuplicateQubit{}},
+		{"SWAP操作数重复", "qubits 2\nbits 1\nSWAP 1 1\n", ErrDuplicateQubit{}},
+		{"CZ操作数重复", "qubits 3\nbits 1\nCZ 2 2\n", ErrDuplicateQubit{}},
+		{"条件门操作数重复", "qubits 2\nbits 1\nIF 0==1 CNOT 1 1\n", ErrDuplicateQubit{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -79,6 +83,11 @@ func TestParseRejections(t *testing.T) {
 				var e ErrIncomplete
 				if !errors.As(err, &e) {
 					t.Fatalf("错误类型不符: got %T, want ErrIncomplete", err)
+				}
+			case ErrDuplicateQubit:
+				var e ErrDuplicateQubit
+				if !errors.As(err, &e) {
+					t.Fatalf("错误类型不符: got %T, want ErrDuplicateQubit", err)
 				}
 			}
 		})

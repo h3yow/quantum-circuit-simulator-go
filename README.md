@@ -24,8 +24,9 @@ IF 0==1 X 1       # 经典比特 0 等于 1 时才执行后续门
 | `circuit.ErrOutOfRange` | 量子比特 / 经典比特下标越界 |
 | `circuit.ErrDuplicateDecl` | `qubits` / `bits` 重复声明 |
 | `circuit.ErrIncomplete` | 缺少声明、操作数不足、语法不完整等 |
+| `circuit.ErrDuplicateQubit` | 同一门的多个操作数指向同一量子比特（如 `CNOT 0 0`），属非法线路 |
 
-任何非法结构都不会被静默忽略。
+任何非法结构都不会被静默忽略；特别地，多比特门的操作数重复（`CNOT 0 0`、`SWAP 1 1`、条件门内同样生效）会在解析期以 `ErrDuplicateQubit` 拒绝，而不会算出看似合理的结果。
 
 ## 测量与随机语义
 
@@ -37,10 +38,34 @@ IF 0==1 X 1       # 经典比特 0 等于 1 时才执行后续门
   - 不同种子下计数可不同，但分布仍符合线路的概率语义。
 - 经典比特串按声明顺序输出，bit 0 在最左（如 `"01"` 表示 bit0=0, bit1=1）。
 
+## 执行会话与检查点
+
+除一次性 `Run`/`Sample` 外，还可以创建**执行会话**逐步推进线路，用于交互式调试与分支对比：
+
+```go
+sess, err := s.NewSession(c, 42)   // 同 (线路, seed) 完全可复现
+for {
+    r, err := sess.Step()          // 推进一条操作
+    if err != nil { /* ... */ }
+    // r.Index/r.Total 进度；r.Bits 当前经典比特；r.Determined 各比特是否已被测量写入
+    p1, err := sess.QubitProbability(0) // 查询指定量子比特当前测得 1 的概率
+    if r.Done { break }
+}
+bits, _ := sess.RunToEnd()         // 也可以从当前位置直接跑完
+```
+
+- 会话独占自己的态矢量、经典比特与随机序列：同一 `(线路, seed)` 同样推进过程下中间与最终结果完全可复现；多个会话并发推进互不污染。
+- `sess.Checkpoint()` 把当前时刻的执行状态（态矢量、经典比特、随机序列位置、进度）存为**检查点**（深拷贝，仅进程内有效，不落盘）；`s.Restore(cp)` 恢复出新会话继续跑，最终经典比特结果与一次性从头跑完**完全一致**。同一检查点可被多个会话并发恢复，彼此独立。
+- 会话与检查点同样受量子比特上限约束：`NewSession`/`Restore` 在线路超限时返回 `sim.ErrTooManyQubits`，不能借会话绕过资源保护。
+
 ## 资源限制与并发
 
-- `sim.New(maxQubits)` 设定量子比特数上限；线路超出时 `Run`/`Sample` 返回 `sim.ErrTooManyQubits`（可用 `errors.As` 判定），不会尝试分配超额内存。
-- `Simulator` 不保存任何运行态，所有状态（态矢量、经典比特、随机源）都在单次调用的栈/堆上独立分配，因此同一实例可被多个 goroutine **并发复用**，运行之间互不污染、无数据竞争（测试以 `-race` 验证）。
+- `sim.New(maxQubits)` 设定量子比特数上限；线路超出时 `Run`/`Sample`/`NewSession`/`Restore` 返回 `sim.ErrTooManyQubits`（可用 `errors.As` 判定），不会尝试分配超额内存。
+- 上限按统一规则钳制，生效值保存在 `Simulator.MaxQubits` 可直接读取：
+  - `maxQubits <= 0`（未显式指定）：使用缺省保护 `sim.DefaultMaxQubits`（20）；
+  - `maxQubits > sim.HardMaxQubits`（30）：钳制到该全局硬上限，任何调用都无法突破；
+  - 不合理的上限只影响钳制后的生效值，不会因此拒绝正常线路。
+- `Simulator` 不保存任何运行态，所有状态（态矢量、经典比特、随机源）都在单次调用或单个会话内独立分配，因此同一实例可被多个 goroutine **并发复用**，运行之间互不污染、无数据竞争（测试以 `-race` 验证）。
 
 ## 本地验证
 
@@ -49,6 +74,8 @@ go build ./...
 go test ./...          # 单元测试（日志含输入电路与判定依据）
 go test ./... -race    # 并发数据竞争检测
 go test ./sim/ -v -run TestConcurrentReuse
+go test ./sim/ -v -run 'TestSession|TestCheckpoint'   # 会话与检查点用例
+go test ./sim/ -v -run 'TestLimit|TestHardCap'        # 资源上限规则用例
 ```
 
 ## 示例

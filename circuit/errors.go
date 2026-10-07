@@ -27,3 +27,14 @@ func (e ErrDuplicateDecl) Error() string { return fmt.Sprintf("duplicate declara
 type ErrIncomplete struct{ What string }
 
 func (e ErrIncomplete) Error() string { return fmt.Sprintf("incomplete circuit: %s", e.What) }
+
+// ErrDuplicateQubit 表示同一个门的多个操作数指向了同一个量子比特。
+// 此类线路物理上无意义（如 CNOT 0 0），作为非法线路拒绝。
+type ErrDuplicateQubit struct {
+	Gate  string // 门名称
+	Qubit int    // 被重复引用的量子比特下标
+}
+
+func (e ErrDuplicateQubit) Error() string {
+	return fmt.Sprintf("gate %s references qubit %d more than once", e.Gate, e.Qubit)
+}
