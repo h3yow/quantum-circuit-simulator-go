@@ -163,6 +163,9 @@ func parseGate(fields []string, c *Circuit) (Operation, error) {
 		}
 		g.Param = p
 	}
+	if err := checkDuplicateOperands(g); err != nil {
+		return Operation{}, err
+	}
 	return Operation{Kind: OpGate, Gate: g}, nil
 }
 

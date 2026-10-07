@@ -49,6 +49,9 @@ func TestParseRejections(t *testing.T) {
 		{"门操作数不足", "qubits 2\nbits 1\nCNOT 0\n", ErrIncomplete{}},
 		{"旋转门缺参数", "qubits 1\nbits 1\nRX 0\n", ErrIncomplete{}},
 		{"非法条件取值", "qubits 1\nbits 1\nIF 0==2 X 0\n", ErrIncomplete{}},
+		{"双比特门操作数重复", "qubits 2\nbits 1\nCNOT 0 0\n", ErrDuplicateOperand{}},
+		{"SWAP操作数重复", "qubits 2\nbits 1\nSWAP 1 1\n", ErrDuplicateOperand{}},
+		{"条件门操作数重复", "qubits 2\nbits 1\nIF 0==1 CZ 1 1\n", ErrDuplicateOperand{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -80,7 +83,43 @@ func TestParseRejections(t *testing.T) {
 				if !errors.As(err, &e) {
 					t.Fatalf("错误类型不符: got %T, want ErrIncomplete", err)
 				}
+			case ErrDuplicateOperand:
+				var e ErrDuplicateOperand
+				if !errors.As(err, &e) {
+					t.Fatalf("错误类型不符: got %T, want ErrDuplicateOperand", err)
+				}
 			}
 		})
 	}
+}
+
+func TestValidateManualCircuit(t *testing.T) {
+	// 绕过 Parse 手工构造的线路，同样要被 Validate 拒绝重复操作数。
+	c := &Circuit{
+		NumQubits: 2,
+		NumBits:   1,
+		Ops: []Operation{
+			{Kind: OpGate, Gate: Gate{Name: "CNOT", Qubits: []int{1, 1}}},
+		},
+	}
+	err := Validate(c)
+	t.Logf("判定依据: 手工构造的 CNOT 1 1 属非法线路, Validate 得到: %v", err)
+	var e ErrDuplicateOperand
+	if !errors.As(err, &e) {
+		t.Fatalf("期望 ErrDuplicateOperand, 得到 %T: %v", err, err)
+	}
+
+	// 合法线路应通过。
+	ok := &Circuit{
+		NumQubits: 2,
+		NumBits:   1,
+		Ops: []Operation{
+			{Kind: OpGate, Gate: Gate{Name: "CNOT", Qubits: []int{0, 1}}},
+			{Kind: OpMeasure, Qubit: 0, Bit: 0},
+		},
+	}
+	if err := Validate(ok); err != nil {
+		t.Fatalf("合法线路未通过 Validate: %v", err)
+	}
+	t.Logf("对照组: CNOT 0 1 + MEASURE 通过 Validate")
 }

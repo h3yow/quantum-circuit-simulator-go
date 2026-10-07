@@ -39,13 +39,14 @@ type Simulator struct {
 	MaxQubits int // 态矢量允许的最大量子比特数，超出返回 ErrTooManyQubits
 }
 
-// New 创建一个模拟器。maxQubits 为允许的量子比特数上限。
-func New(maxQubits int) *Simulator { return &Simulator{MaxQubits: maxQubits} }
+// New 创建一个模拟器。maxQubits 为允许的量子比特数上限：
+// <=0 时使用缺省保护上限，超过全局硬上限时被收敛到硬上限（见 limits.go）。
+func New(maxQubits int) *Simulator { return &Simulator{MaxQubits: normalizeLimit(maxQubits)} }
 
 // Run 以给定随机种子运行线路一次，返回最终经典比特数组。
 // 同一 (circuit, seed) 的结果完全可复现。
 func (s *Simulator) Run(c *circuit.Circuit, seed int64) ([]int, error) {
-	rng := rand.New(rand.NewSource(seed))
+	rng, _ := newRNG(seed)
 	return s.runOnce(c, rng)
 }
 
@@ -58,7 +59,7 @@ func (s *Simulator) Sample(c *circuit.Circuit, shots int, seed int64) (*Result, 
 	if err := s.checkSize(c); err != nil {
 		return nil, err
 	}
-	rng := rand.New(rand.NewSource(seed))
+	rng, _ := newRNG(seed)
 	res := &Result{Shots: shots, Counts: map[string]int{}}
 	for i := 0; i < shots; i++ {
 		bits, err := s.runOnce(c, rng)
@@ -79,6 +80,9 @@ func (s *Simulator) checkSize(c *circuit.Circuit) error {
 
 // runOnce 演化一次完整线路。rng 由调用方持有，保证 Sample 内多次运行共享同一随机序列。
 func (s *Simulator) runOnce(c *circuit.Circuit, rng *rand.Rand) ([]int, error) {
+	if err := circuit.Validate(c); err != nil {
+		return nil, err
+	}
 	if err := s.checkSize(c); err != nil {
 		return nil, err
 	}
@@ -89,18 +93,26 @@ func (s *Simulator) runOnce(c *circuit.Circuit, rng *rand.Rand) ([]int, error) {
 	bits := make([]int, c.NumBits)
 
 	for _, op := range c.Ops {
-		switch op.Kind {
-		case circuit.OpGate:
-			applyGate(state, n, op.Gate)
-		case circuit.OpMeasure:
-			bits[op.Bit] = measure(state, n, op.Qubit, rng)
-		case circuit.OpConditional:
-			if bits[op.CondBit] == op.CondValue {
-				applyGate(state, n, op.Gate)
-			}
-		}
+		execOp(state, n, bits, op, rng)
 	}
 	return bits, nil
+}
+
+// execOp 执行一条操作（原地修改态矢量与经典比特）。
+// 若该操作为测量，返回被写入的经典比特下标，否则返回 -1。
+func execOp(state []complex128, n int, bits []int, op circuit.Operation, rng *rand.Rand) int {
+	switch op.Kind {
+	case circuit.OpGate:
+		applyGate(state, n, op.Gate)
+	case circuit.OpMeasure:
+		bits[op.Bit] = measure(state, n, op.Qubit, rng)
+		return op.Bit
+	case circuit.OpConditional:
+		if bits[op.CondBit] == op.CondValue {
+			applyGate(state, n, op.Gate)
+		}
+	}
+	return -1
 }
 
 func bitString(bits []int) string {
@@ -206,8 +218,8 @@ func applySWAP(state []complex128, n, a, b int) {
 	}
 }
 
-// measure 测量量子比特 q：按当前态的概率分布抽样，坍缩并归一化，返回 0 或 1。
-func measure(state []complex128, n, q int, rng *rand.Rand) int {
+// probOfOne 返回当前态下量子比特 q 测得 1 的概率（不修改态矢量）。
+func probOfOne(state []complex128, q int) float64 {
 	mask := 1 << uint(q)
 	var p1 float64
 	for i := 0; i < len(state); i++ {
@@ -215,6 +227,13 @@ func measure(state []complex128, n, q int, rng *rand.Rand) int {
 			p1 += real(state[i])*real(state[i]) + imag(state[i])*imag(state[i])
 		}
 	}
+	return p1
+}
+
+// measure 测量量子比特 q：按当前态的概率分布抽样，坍缩并归一化，返回 0 或 1。
+func measure(state []complex128, n, q int, rng *rand.Rand) int {
+	mask := 1 << uint(q)
+	p1 := probOfOne(state, q)
 	outcome := 0
 	if rng.Float64() < p1 {
 		outcome = 1
